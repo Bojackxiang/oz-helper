@@ -30,7 +30,7 @@ export function TaskFeedError({ error }: TaskFeedErrorProps) {
   return (
     <div className="relative overflow-hidden rounded-2xl border border-border/50 bg-card py-16 text-center shadow-sm">
       {/* Ambient gradient */}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-destructive/5 via-transparent to-transparent" />
+      <div className="pointer-events-none absolute inset-0 bg-linear-to-br from-destructive/5 via-transparent to-transparent" />
 
       <div className="relative flex flex-col items-center px-8">
         {/* Icon */}
