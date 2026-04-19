@@ -1,7 +1,7 @@
 # OzHelper — Frontend Architecture Document
 
 > **Version:** 1.0
-> **Scope:** Enterprise-grade frontend engineering standards for the OzHelper project (Next.js 16, App Router, TanStack Query, TypeScript).
+> **Scope:** Enterprise-grade frontend engineering standards for the OzHelper project (Next.js 16, App Router, TanStack Query, Prisma ORM, TypeScript).
 > **Purpose:** This document defines folder structure, data-fetching conventions, component architecture, state management, error/loading patterns, and code standards to ensure the codebase remains maintainable as the project scales.
 
 ---
@@ -23,6 +23,8 @@
 13. [Auth & Protected Routes](#13-auth--protected-routes)
 14. [Code Standards & Conventions](#14-code-standards--conventions)
 15. [Dependency Map](#15-dependency-map)
+16. [Internationalisation (i18n)](#16-internationalisation-i18n)
+17. [UGC Content Translation](#17-ugc-content-translation)
 
 ---
 
@@ -42,25 +44,119 @@ Every file should have a single, clear responsibility. Never mix data definition
 | Feature-specific components | `components/{feature}/` |
 | Page orchestration | `app/(route)/page.tsx` |
 | Server-side data fetching | `app/(route)/page.tsx` (RSC) or route handlers |
+| Prisma Client singleton | `lib/prisma.ts` |
+| Server-side DB query functions | `lib/db/` |
+| API route handlers (HTTP endpoints) | `app/api/` |
 
 ### 1.2 Server Components vs Client Components
 
-- **Prefer Server Components (RSC)** by default. They render on the server, have no bundle cost, and can directly access databases/APIs.
-- **Use `"use client"` only when** the component needs: browser events, `useState`, `useEffect`, TanStack Query hooks, or third-party client-only libraries.
+This is the most important architectural decision in every component you write. The rule is: **default to Server Component, add `"use client"` only when forced to.**
+
+#### When you MUST use `"use client"`
+
+If your component requires **any** of the following, it must be a Client Component:
+
+| Requirement | Examples |
+|---|---|
+| Browser event handlers | `onClick`, `onChange`, `onSubmit` |
+| React state | `useState`, `useReducer` |
+| React side effects / refs | `useEffect`, `useRef`, `useCallback` (with state dep) |
+| TanStack Query hooks | `useQuery`, `useMutation`, `useQueryClient` |
+| Client-side navigation hooks | `useRouter`, `useSearchParams`, `usePathname` |
+| Third-party libraries not adapted for RSC | Most UI animation libs, chart libs, etc. |
+
+#### When to keep it a Server Component (default)
+
+| Scenario | Examples in this project |
+|---|---|
+| Data display pages (SEO matters) | Task list, task detail, profile page |
+| Static layout and chrome | Sidebar, header, footer, page shell |
+| Database access via Prisma | Any `page.tsx` that reads data on load |
+| Conditional redirects | Auth guards using `redirect()` |
+| No user interaction needed | `TaskCard`, `TaskCardSkeleton`, marketing sections |
+
+#### Decision Tree
+
+```
+Does this component need user interaction (click, input, etc.)?
+├── Yes → "use client"
+└── No
+    └── Does it need browser APIs (window, localStorage, IntersectionObserver)?
+        ├── Yes → "use client"
+        └── No
+            └── Does it need React hooks (useState, useEffect, useQuery...)?
+                ├── Yes → "use client"
+                └── No → Server Component ✅  (can use Prisma directly)
+```
+
+#### Project component classification
+
+| Component | Type | Reason |
+|---|---|---|
+| `app/**/page.tsx` | Server Component | Fetches data via Prisma, no interactivity |
+| `app/**/layout.tsx` | Server Component | Static structure |
+| `TaskCard` | Server Component | Pure display, no events |
+| `TaskCardSkeleton` | Server Component | Pure display |
+| Marketing sections (`HeroSection`, etc.) | Server Component | Static content |
+| `TaskFeed` | **Client Component** | Uses `useQuery` + filter state |
+| `TaskFilters` | **Client Component** | Uses `useState` + `useSearchParams` |
+| `NewTaskForm` | **Client Component** | Uses `useForm` + `useMutation` |
+| Sidebar (with collapse) | **Client Component** | Uses `useState` for open/close |
+| Any `Dialog` / `Sheet` / `Dropdown` | **Client Component** | Uses `useState` for open state |
+
+#### The golden rule: push `"use client"` to the leaf nodes
+
+Never add `"use client"` to a page or layout just because one small child needs it. Instead, extract the interactive part into its own component and add `"use client"` only there.
+
+```tsx
+// ❌ Anti-pattern: entire page becomes Client because of one button
+"use client";
+export default function TasksPage() {
+  // Now this page can no longer use Prisma directly
+  const [open, setOpen] = useState(false);
+  const tasks = ...; // forced to fetch via HTTP instead of Prisma
+  return <div>...</div>;
+}
+
+// ✅ Correct: page is RSC, only the interactive slice is Client
+// app/(dashboard)/tasks/page.tsx  ← RSC, Prisma direct
+export default async function TasksPage() {
+  const tasks = await queryTasks({});
+  return (
+    <div>
+      <TaskList tasks={tasks} />   {/* Server Component — pure display */}
+      <TaskFeed />                  {/* Client Component — has useQuery + filters */}
+    </div>
+  );
+}
+```
+
+This keeps the HTML rendered on the server, minimises JavaScript bundle size, and ensures the best possible SEO and Time to First Byte.
+
 - **Never put TanStack Query hooks in a Server Component.** The `QueryClientProvider` boundary must wrap all client-side query consumers.
+- **Never use Prisma in a Client Component.** Prisma is Node.js-only and cannot run in the browser. Client Components always fetch data via `app/api/` Route Handlers.
 
 ### 1.3 Data Flow Direction
 
 ```
-Backend API
-    ↓
-lib/api/{resource}.ts          ← pure fetch functions, no React
-    ↓
-hooks/queries/use-{resource}.ts ← TanStack Query hooks (client)
-    ↓
-components/{feature}/{Component}.tsx ← receives data as props
-    ↓
-app/(route)/page.tsx            ← orchestrates, passes data down
+Database (Prisma ORM)
+         ↓
+    lib/prisma.ts                    ← Prisma Client singleton (server-only)
+         ↓
+    lib/db/{resource}.ts             ← server-only DB query functions
+
+    RSC path ↙                        ↘ Client path
+app/(route)/page.tsx            app/api/{resource}/route.ts
+← calls lib/db/ directly         ← Route Handler, calls lib/db/
+         ↓                                    ↓
+components/{feature}/            lib/api/{resource}.ts
+← receives data as props         ← fetch functions, calls /api/* routes
+                                           ↓
+                                 hooks/queries/use-{resource}.ts
+                                 ← TanStack Query hooks (client)
+                                           ↓
+                                 components/{feature}/
+                                 ← receives data as props
 ```
 
 ### 1.4 Progressive Enhancement
@@ -73,6 +169,10 @@ Pages must be functional even before JavaScript hydrates. Use RSC where possible
 
 ```
 oz-helper/
+├── prisma/
+│   ├── schema.prisma             # Database schema
+│   └── migrations/               # Auto-generated migration files
+│
 ├── app/                          # Next.js App Router
 │   ├── layout.tsx                # Root layout (QueryClientProvider here)
 │   ├── page.tsx                  # "/" — task discovery feed
@@ -86,6 +186,15 @@ oz-helper/
 │   ├── onboarding/
 │   │   └── tasker/
 │   │       └── page.tsx
+│   ├── api/                      # Route Handlers (HTTP endpoints)
+│   │   ├── tasks/
+│   │   │   ├── route.ts          # GET /api/tasks, POST /api/tasks
+│   │   │   └── [id]/
+│   │   │       └── route.ts      # GET /api/tasks/:id
+│   │   ├── profile/
+│   │   │   └── route.ts
+│   │   └── wallet/
+│   │       └── route.ts
 │   └── (dashboard)/              # Route group — authenticated
 │       ├── layout.tsx            # Sidebar layout
 │       ├── dashboard/
@@ -136,7 +245,12 @@ oz-helper/
 │   └── use-mobile.ts             # Existing utility hooks
 │
 ├── lib/
-│   ├── api/                      # Pure fetch functions (no React)
+│   ├── prisma.ts                 # Prisma Client singleton (server-only)
+│   ├── db/                       # Server-only DB query functions (Node.js)
+│   │   ├── tasks.ts
+│   │   ├── profile.ts
+│   │   └── wallet.ts
+│   ├── api/                      # Client-side fetch functions (call /api/* routes)
 │   │   ├── client.ts             # Base fetch client (error handling, auth headers)
 │   │   ├── tasks.ts
 │   │   ├── profile.ts
@@ -252,16 +366,165 @@ export interface ApiError {
 
 ---
 
-## 4. API Layer
+## 4. Data Access Layer
 
-### 4.1 Base Client (`lib/api/client.ts`)
+This project uses **Prisma ORM** as the database layer. There are two distinct access paths depending on context:
 
-A single base client handles auth headers, base URL, and uniform error throwing. All resource-specific fetch functions call this, never `fetch` directly.
+| Context | Mechanism | Files involved |
+|---|---|---|
+| Server Components (RSC) | Direct Prisma call | `lib/db/{resource}.ts` |
+| Client Components | `fetch` → Route Handler → Prisma | `lib/api/{resource}.ts` → `app/api/` → `lib/db/` |
+
+### 4.1 Prisma Client Singleton (`lib/prisma.ts`)
+
+Prisma Client must be a singleton — in development, Next.js hot-reload would otherwise exhaust the database connection pool.
+
+```ts
+// lib/prisma.ts
+// SERVER-ONLY — never import this in Client Components or lib/api/
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+
+export const prisma =
+  globalForPrisma.prisma ?? new PrismaClient();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
+```
+
+### 4.2 Server DB Query Functions (`lib/db/tasks.ts`)
+
+All Prisma calls are centralised in `lib/db/`. These are **server-only** — called from Route Handlers and RSC pages. Never import in Client Components.
+
+```ts
+// lib/db/tasks.ts
+// SERVER-ONLY — do not import in Client Components
+import { prisma } from "@/lib/prisma";
+import type { Task, TaskFilters } from "@/types/task";
+import type { PaginatedResponse } from "@/types/api";
+
+export async function queryTasks(
+  filters: Partial<TaskFilters> & { page?: number; pageSize?: number },
+): Promise<PaginatedResponse<Task>> {
+  const page = filters.page ?? 1;
+  const pageSize = filters.pageSize ?? 9;
+  const skip = (page - 1) * pageSize;
+
+  const where = {
+    ...(filters.categoryId && filters.categoryId !== "all"
+      ? { category: filters.categoryId }
+      : {}),
+    ...(filters.state && filters.state !== "All States"
+      ? { state: filters.state }
+      : {}),
+    ...(filters.search
+      ? { title: { contains: filters.search, mode: "insensitive" as const } }
+      : {}),
+    status: "open" as const,
+  };
+
+  const [tasks, total] = await Promise.all([
+    prisma.task.findMany({
+      where,
+      skip,
+      take: pageSize,
+      orderBy: { postedAt: "desc" },
+      include: { poster: true },
+    }),
+    prisma.task.count({ where }),
+  ]);
+
+  return {
+    data: tasks as unknown as Task[],
+    total,
+    page,
+    pageSize,
+    hasMore: skip + tasks.length < total,
+  };
+}
+
+export async function queryTask(id: number): Promise<Task> {
+  return prisma.task.findUniqueOrThrow({
+    where: { id },
+    include: { poster: true },
+  }) as unknown as Promise<Task>;
+}
+
+export async function createTaskRecord(
+  payload: Omit<Task, "id" | "postedAt" | "status" | "offers" | "poster">,
+  posterId: string,
+): Promise<Task> {
+  return prisma.task.create({
+    data: { ...payload, posterId, status: "open" },
+    include: { poster: true },
+  }) as unknown as Promise<Task>;
+}
+```
+
+### 4.3 API Route Handlers (`app/api/`)
+
+Route Handlers are the HTTP interface for Client Components. They call `lib/db/` and return JSON responses.
+
+```ts
+// app/api/tasks/route.ts
+import { NextResponse } from "next/server";
+import { queryTasks } from "@/lib/db/tasks";
+import type { TaskFilters } from "@/types/task";
+
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const filters: Partial<TaskFilters> = {
+    categoryId: (searchParams.get("category") as TaskFilters["categoryId"]) ?? "all",
+    state: searchParams.get("state") ?? "All States",
+    search: searchParams.get("q") ?? "",
+    sortBy: (searchParams.get("sort") as TaskFilters["sortBy"]) ?? "newest",
+  };
+  const page = Number(searchParams.get("page") ?? 1);
+  const pageSize = Number(searchParams.get("pageSize") ?? 9);
+
+  try {
+    const data = await queryTasks({ ...filters, page, pageSize });
+    return NextResponse.json(data);
+  } catch {
+    return NextResponse.json(
+      { message: "Failed to fetch tasks", code: "INTERNAL_ERROR" },
+      { status: 500 },
+    );
+  }
+}
+```
+
+```ts
+// app/api/tasks/[id]/route.ts
+import { NextResponse } from "next/server";
+import { queryTask } from "@/lib/db/tasks";
+
+export async function GET(
+  _req: Request,
+  { params }: { params: { id: string } },
+) {
+  try {
+    const task = await queryTask(Number(params.id));
+    return NextResponse.json(task);
+  } catch {
+    return NextResponse.json(
+      { message: "Task not found", code: "NOT_FOUND" },
+      { status: 404 },
+    );
+  }
+}
+```
+
+### 4.4 Base HTTP Client (`lib/api/client.ts`)
+
+Used by Client Components to call same-origin Route Handlers. `BASE_URL` is `/api` — no external server required.
 
 ```ts
 // lib/api/client.ts
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api";
+const BASE_URL = "/api";
 
 export class ApiError extends Error {
   constructor(
@@ -275,7 +538,6 @@ export class ApiError extends Error {
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  // Replace with your auth provider's token retrieval
   const token = typeof window !== "undefined"
     ? localStorage.getItem("oz_access_token")
     : null;
@@ -310,7 +572,9 @@ export async function apiClient<T>(
 }
 ```
 
-### 4.2 Resource API Functions (`lib/api/tasks.ts`)
+### 4.5 Resource Fetch Functions (`lib/api/tasks.ts`)
+
+Used by TanStack Query hooks in Client Components. Calls the Route Handlers defined in `app/api/`.
 
 ```ts
 // lib/api/tasks.ts
@@ -359,12 +623,16 @@ export async function submitOffer(
 }
 ```
 
-### 4.3 API Function Rules
+### 4.6 Data Access Rules
 
-- **Never import React** inside `lib/api/`. These are plain async functions.
-- **Never handle UI state** (loading, error toasts) here. That belongs in hooks or components.
-- **Always type inputs and outputs** explicitly. Use the shared types from `types/`.
-- **Always throw** on error responses (the base client handles this) — never return `null` or `undefined` to mask errors.
+| Rule | Reason |
+|---|---|
+| `lib/db/` is server-only | Prevents Prisma from leaking into the client bundle |
+| `lib/prisma.ts` uses a global singleton | Prevents connection pool exhaustion during dev hot-reload |
+| Route Handlers call `lib/db/`, never `lib/api/` | Avoids unnecessary HTTP round-trips on the server |
+| RSC `page.tsx` calls `lib/db/` directly | No HTTP overhead — faster Time to First Byte |
+| Client Components use `lib/api/` → Route Handlers | Prisma is Node.js-only, cannot run in the browser |
+| Never put raw Prisma calls in `page.tsx` | Extract to `lib/db/` for reusability and testability |
 
 ---
 
@@ -590,11 +858,15 @@ export function TaskCard({ task, className }: TaskCardProps) {
 
 ### 6.3 Smart vs Dumb Components
 
-| Type | Example | Has query hooks? | Has state? |
-|---|---|---|---|
-| Dumb / Presentational | `TaskCard`, `TaskCardSkeleton` | No | No (or minimal UI state) |
-| Smart / Container | `TaskFeed` | Yes (`useTasks`) | Yes (filters, pagination) |
-| Page | `app/(dashboard)/tasks/page.tsx` | Rarely (prefer RSC prefetch) | No |
+This classification maps directly to the RSC vs Client Component boundary defined in [Section 1.2](#12-server-components-vs-client-components).
+
+| Type | Rendering | Example | Has query hooks? | Has state? |
+|---|---|---|---|---|
+| Dumb / Presentational | Server Component | `TaskCard`, `TaskCardSkeleton` | No | No |
+| Smart / Container | **Client Component** | `TaskFeed`, `TaskFilters` | Yes (`useQuery`) | Yes |
+| Page | Server Component | `app/(dashboard)/tasks/page.tsx` | No (uses `lib/db/` directly) | No |
+
+**Key implication:** `TaskCard` can be a Server Component because it only receives a `task` prop and renders it. `TaskFeed` must be a Client Component because it calls `useTasks()`. The page passes pre-fetched data to `TaskCard` via props, while `TaskFeed` manages its own data fetching client-side for interactive filtering.
 
 ### 6.4 Extracting from `page.tsx`
 
@@ -931,29 +1203,31 @@ export const mockTasksPage: PaginatedResponse<Task> = {
 };
 ```
 
-### 10.2 Switching Between Mock and Real API
+### 10.2 Switching Between Mock and Real Database
 
-Use an environment variable to toggle data sources. This removes the need to change any component code:
+Use a **server-side** environment variable to toggle data sources inside `lib/db/`. Since mocking happens on the server (Node.js only), no `NEXT_PUBLIC_` prefix is needed — the flag never reaches the client bundle.
 
 ```ts
-// lib/api/tasks.ts
+// lib/db/tasks.ts
 import { mockTasksPage } from "@/lib/mocks/tasks";
 
-export async function fetchTasks(filters, page) {
-  if (process.env.NEXT_PUBLIC_USE_MOCKS === "true") {
-    // Simulate network delay in dev
+export async function queryTasks(filters, page) {
+  if (process.env.USE_MOCKS === "true") {
+    // Simulate database query latency
     await new Promise((r) => setTimeout(r, 400));
     return mockTasksPage;
   }
-  return apiClient(`/tasks?${buildParams(filters, page)}`);
+  // real Prisma query...
 }
 ```
 
 `.env.local`:
 ```
-NEXT_PUBLIC_USE_MOCKS=true
-NEXT_PUBLIC_API_URL=http://localhost:3001/api
+USE_MOCKS=true
+DATABASE_URL=postgresql://user:password@localhost:5432/ozhelper
 ```
+
+> **Note:** Because mock switching lives in `lib/db/` (server-only), the flag is never exposed to the client — safer than `NEXT_PUBLIC_USE_MOCKS`.
 
 ---
 
@@ -989,12 +1263,12 @@ export default function HomePage() {
 
 ### 11.2 Server-Side Prefetching with TanStack Query (Advanced)
 
-For pages where SEO or initial load speed matters, prefetch data in the Server Component and hydrate the client cache:
+For pages where SEO or initial load speed matters, prefetch data in the Server Component using Prisma directly (no HTTP round-trip) and hydrate the client cache:
 
 ```tsx
-// app/page.tsx (RSC with hydration)
+// app/page.tsx (RSC with hydration — Prisma direct, no HTTP)
 import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
-import { fetchTasks } from "@/lib/api/tasks";
+import { queryTasks } from "@/lib/db/tasks";   // ← Prisma direct, no fetch()
 import { queryKeys } from "@/lib/query-keys";
 import { TaskDiscoveryFeed } from "@/components/tasks/task-discovery-feed";
 
@@ -1003,7 +1277,7 @@ export default async function HomePage() {
 
   await queryClient.prefetchQuery({
     queryKey: queryKeys.tasks.list({ page: 1 }),
-    queryFn: () => fetchTasks({ page: 1, pageSize: 9 }),
+    queryFn: () => queryTasks({ page: 1, pageSize: 9 }), // ← Prisma, not fetch()
   });
 
   return (
@@ -1015,6 +1289,7 @@ export default async function HomePage() {
 ```
 
 This pattern:
+- Queries the database **directly** on the server — no HTTP round-trip
 - Renders HTML immediately with data (great for SEO)
 - Hydrates the TanStack Query client cache on the browser
 - The client component sees `isLoading: false` immediately — no flash
@@ -1197,26 +1472,322 @@ export function formatPrice(cents: number): string {
 ## 15. Dependency Map
 
 ```
-app/page.tsx
-└── components/tasks/task-discovery-feed.tsx   ["use client"]
-    ├── hooks/queries/use-tasks.ts
-    │   ├── lib/api/tasks.ts
-    │   │   └── lib/api/client.ts
-    │   ├── lib/query-keys.ts
-    │   └── (lib/mocks/tasks.ts  ← dev only)
-    ├── components/tasks/task-card.tsx          [pure, no hooks]
-    │   └── types/task.ts
-    ├── components/tasks/task-card-skeleton.tsx [pure, no hooks]
-    ├── components/tasks/task-feed-error.tsx    [uses useQueryClient]
-    └── components/shared/empty-state.tsx       [pure]
+Database (Prisma)
+    └── lib/prisma.ts
+            └── lib/db/tasks.ts  [server-only]
+                    ├── (lib/mocks/tasks.ts  ← dev only, USE_MOCKS=true)
+                    ├── app/api/tasks/route.ts     [Route Handler]
+                    │       ← called by lib/api/tasks.ts via fetch()
+                    └── app/page.tsx  [RSC — Prisma direct, no HTTP]
+                            └── HydrationBoundary
+                                    └── components/tasks/task-discovery-feed.tsx  ["use client"]
+                                            ├── hooks/queries/use-tasks.ts
+                                            │   ├── lib/api/tasks.ts  → GET /api/tasks
+                                            │   │   └── lib/api/client.ts
+                                            │   └── lib/query-keys.ts
+                                            ├── components/tasks/task-card.tsx          [pure, no hooks]
+                                            │   └── types/task.ts
+                                            ├── components/tasks/task-card-skeleton.tsx [pure, no hooks]
+                                            ├── components/tasks/task-feed-error.tsx    [uses useQueryClient]
+                                            └── components/shared/empty-state.tsx       [pure]
 
 app/(dashboard)/tasks/new/page.tsx
 └── components/tasks/new-task-form/index.tsx   ["use client"]
     ├── hooks/mutations/use-create-task.ts
-    │   ├── lib/api/tasks.ts
+    │   ├── lib/api/tasks.ts  → POST /api/tasks  → app/api/tasks/route.ts  → lib/db/tasks.ts
     │   └── lib/query-keys.ts
     └── components/tasks/new-task-form/schema.ts
 ```
+
+---
+
+## 16. Internationalisation (i18n)
+
+OzHelper supports **English (`en`)** and **Chinese (`zh`)**. UI text is handled by `next-intl`, which has first-class support for the App Router (both RSC and Client Components).
+
+### 16.1 URL Structure
+
+```
+/en/tasks          ← English
+/zh/tasks          ← Chinese
+/                  ← Auto-detects browser language and redirects
+```
+
+All routes are nested under a `[locale]` dynamic segment:
+
+```
+app/
+  [locale]/
+    layout.tsx       ← provides locale to next-intl
+    page.tsx
+    (dashboard)/
+      tasks/page.tsx
+      ...
+```
+
+### 16.2 Translation File Structure (per-module files)
+
+Translation files are split by feature module. This keeps files small and allows `next-intl` to load only what a page needs.
+
+```
+messages/
+  en/
+    common.json      ← shared actions, errors, nav labels
+    tasks.json
+    profile.json
+    wallet.json
+    auth.json
+    dashboard.json
+  zh/
+    common.json
+    tasks.json
+    profile.json
+    wallet.json
+    auth.json
+    dashboard.json
+```
+
+### 16.3 Translation File Conventions
+
+Keys are organised by **component layer** within each file. English is the canonical source — never use Chinese as a key.
+
+```json
+// messages/zh/tasks.json
+{
+  "page": {
+    "title": "找任务",
+    "subtitle": "在你附近发现各类任务"
+  },
+  "card": {
+    "offers": "{count} 个报价",
+    "urgent": "紧急",
+    "postedAt": "{time}前发布"
+  },
+  "filters": {
+    "allCategories": "全部分类",
+    "allStates": "全部州",
+    "searchPlaceholder": "搜索任务..."
+  },
+  "empty": {
+    "title": "暂无任务",
+    "description": "试试调整筛选条件"
+  },
+  "status": {
+    "open": "开放中",
+    "in_progress": "进行中",
+    "completed": "已完成",
+    "cancelled": "已取消"
+  }
+}
+```
+
+```json
+// messages/zh/common.json
+{
+  "actions": {
+    "save": "保存",
+    "cancel": "取消",
+    "confirm": "确认",
+    "back": "返回",
+    "submit": "提交",
+    "retry": "重试"
+  },
+  "errors": {
+    "generic": "出了点问题，请稍后重试",
+    "notFound": "页面不存在",
+    "unauthorized": "请先登录"
+  },
+  "nav": {
+    "dashboard": "仪表盘",
+    "tasks": "任务",
+    "messages": "消息",
+    "wallet": "钱包",
+    "profile": "个人主页",
+    "settings": "设置"
+  }
+}
+```
+
+### 16.4 Usage in Components
+
+**Server Component (RSC):**
+```tsx
+// app/[locale]/(dashboard)/tasks/page.tsx
+import { getTranslations } from "next-intl/server";
+
+export default async function TasksPage() {
+  const t = await getTranslations("tasks");   // loads messages/{locale}/tasks.json
+  return (
+    <div>
+      <h1>{t("page.title")}</h1>
+      <p>{t("page.subtitle")}</p>
+    </div>
+  );
+}
+```
+
+**Client Component:**
+```tsx
+// components/tasks/task-card.tsx
+"use client";
+import { useTranslations } from "next-intl";
+
+export function TaskCard({ task }: TaskCardProps) {
+  const t = useTranslations("tasks");
+  const tCommon = useTranslations("common");
+
+  return (
+    <div>
+      <span>{t(`status.${task.status}`)}</span>               {/* dynamic key */}
+      <span>{t("card.offers", { count: task.offers })}</span> {/* interpolation */}
+      <button>{tCommon("actions.save")}</button>
+    </div>
+  );
+}
+```
+
+### 16.5 i18n Rules
+
+| Rule | Reason |
+|---|---|
+| Translation only happens in the UI layer | `lib/db/`, `lib/api/`, and types never contain translated strings |
+| Database stores enum values in English (`"open"`, `"in_progress"`) | Translate to display text via `t("status.open")` in the UI |
+| `common.json` only for truly shared strings | Don't dump everything into common — keep it focused |
+| Write English keys first, then Chinese values | English is the canonical source, prevents drift |
+| never use Chinese as a translation key | Keys must be language-agnostic identifiers |
+
+---
+
+## 17. UGC Content Translation
+
+UI translation (Section 16) handles static text you control. **UGC (User Generated Content)** — task titles, descriptions, and messages posted by users — requires a different approach: machine translation stored in the database.
+
+### 17.1 Strategy: Pre-translate at Publish Time (Recommended)
+
+When a user posts a task, a background job immediately translates the content to all other supported locales and persists the result. Subsequent reads are free — no API call needed at query time.
+
+```
+User submits task
+        ↓
+createTaskRecord() — saves original text (e.g. English)
+        ↓
+Async background job triggers
+        ↓
+Calls Google Translate / DeepL API
+        ↓
+  ✅ Success → writes titleZh / descriptionZh to DB
+  ❌ Failure → leaves null, UI falls back to original text
+```
+
+### 17.2 Prisma Schema
+
+Add translated columns alongside the original fields:
+
+```prisma
+// prisma/schema.prisma
+model Task {
+  id              Int       @id @default(autoincrement())
+  // Original content (author's language)
+  titleEn         String
+  descriptionEn   String
+  // Translated content (nullable until translation job completes)
+  titleZh         String?
+  descriptionZh   String?
+  // Original locale so we know which field is the source of truth
+  originalLocale  String    @default("en")   // "en" | "zh"
+
+  // ... other fields
+}
+```
+
+### 17.3 DB Query with Locale-Aware Field Selection
+
+```ts
+// lib/db/tasks.ts
+export async function queryTask(id: number, locale: "en" | "zh"): Promise<Task> {
+  const row = await prisma.task.findUniqueOrThrow({
+    where: { id },
+    include: { poster: true },
+  });
+
+  // Serve translated content if available, fall back to original
+  return {
+    ...row,
+    title:       locale === "zh" ? (row.titleZh       ?? row.titleEn)       : row.titleEn,
+    description: locale === "zh" ? (row.descriptionZh ?? row.descriptionEn) : row.descriptionEn,
+    translationPending: locale === "zh" && !row.titleZh,
+  } as unknown as Task;
+}
+```
+
+### 17.4 Translation Job
+
+Keep the translation concern inside `lib/db/` so it never touches the UI layer:
+
+```ts
+// lib/db/translation.ts  (server-only)
+import { prisma } from "@/lib/prisma";
+
+export async function translateTask(taskId: number): Promise<void> {
+  const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } });
+
+  // Call your translation provider (Google Translate / DeepL)
+  const [titleZh, descriptionZh] = await Promise.all([
+    translateText(task.titleEn, "zh"),
+    translateText(task.descriptionEn, "zh"),
+  ]);
+
+  await prisma.task.update({
+    where: { id: taskId },
+    data: { titleZh, descriptionZh },
+  });
+}
+
+async function translateText(text: string, targetLocale: string): Promise<string> {
+  // Google Translate example — replace with your provider
+  const res = await fetch(
+    `https://translation.googleapis.com/language/translate/v2?key=${process.env.GOOGLE_TRANSLATE_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q: text, target: targetLocale }),
+    },
+  );
+  const json = await res.json();
+  return json.data.translations[0].translatedText;
+}
+```
+
+### 17.5 UI Fallback
+
+When a translation hasn't completed yet, show the original text with a subtle indicator:
+
+```tsx
+// components/tasks/task-card.tsx
+export function TaskCard({ task }: TaskCardProps) {
+  const t = useTranslations("tasks");
+  return (
+    <div>
+      <h3>{task.title}</h3>  {/* already locale-resolved by queryTask() */}
+      {task.translationPending && (
+        <span className="text-xs text-muted-foreground">
+          {t("card.translationPending")}  {/* "翻译处理中" */}
+        </span>
+      )}
+    </div>
+  );
+}
+```
+
+### 17.6 UGC Translation Rules
+
+| Rule | Reason |
+|---|---|
+| Translation resolved in `lib/db/`, not in components | Components receive already-localised data as props |
+| Always fall back to original text if translation is null | Never show a blank title |
+| Store `originalLocale` on the record | Needed when a Chinese user posts — translate to English, not the other way |
+| Translation API key in `.env` (server-only, no `NEXT_PUBLIC_`) | Key must never reach the client bundle |
+| Translation job is async and fire-and-forget at post time | Don't block the user's publish action |
 
 ---
 
@@ -1224,21 +1795,59 @@ app/(dashboard)/tasks/new/page.tsx
 
 Use this checklist when migrating `app/page.tsx` to the architecture above:
 
+**Prisma & Database**
+- [ ] Install Prisma: `pnpm add prisma @prisma/client` and run `npx prisma init`
+- [ ] Define schema in `prisma/schema.prisma` (Task, User, etc.)
+- [ ] Run first migration: `npx prisma migrate dev --name init`
+- [ ] Create `lib/prisma.ts` Prisma Client singleton
+- [ ] Create `lib/db/tasks.ts` with `queryTasks()`, `queryTask()`, `createTaskRecord()`
+
+**API Route Handlers**
+- [ ] Create `app/api/tasks/route.ts` (GET, POST)
+- [ ] Create `app/api/tasks/[id]/route.ts` (GET)
+
+**Types & Mocks**
 - [ ] Create `types/task.ts` with proper typed interfaces
 - [ ] Move mock data to `lib/mocks/tasks.ts`, convert `price` to `number`
+
+**API Client (for Client Components)**
 - [ ] Create `lib/api/tasks.ts` with `fetchTasks()` and `fetchTask()`
-- [ ] Create `lib/api/client.ts` base fetch utility
+- [ ] Create `lib/api/client.ts` base fetch utility (`BASE_URL = "/api"`)
+
+**TanStack Query**
 - [ ] Create `lib/query-keys.ts`
 - [ ] Create `lib/query-client.ts` and `providers/query-provider.tsx`
 - [ ] Add `<QueryProvider>` to `app/layout.tsx`
 - [ ] Install `@tanstack/react-query` and `@tanstack/react-query-devtools`
 - [ ] Create `hooks/queries/use-tasks.ts`
+
+**Components**
 - [ ] Extract `TaskCard` to `components/tasks/task-card.tsx`
 - [ ] Create `components/tasks/task-card-skeleton.tsx`
 - [ ] Create `components/tasks/task-feed-error.tsx`
 - [ ] Create `components/tasks/task-feed.tsx` (smart container)
 - [ ] Create `components/tasks/task-filters.tsx` (category pills + state tabs)
-- [ ] Slim down `app/page.tsx` to layout orchestration only
+- [ ] Slim down `app/page.tsx` to RSC orchestration with `HydrationBoundary`
+
+**Loading / Error / Auth**
 - [ ] Add `app/(dashboard)/tasks/loading.tsx`
 - [ ] Add `app/(dashboard)/tasks/error.tsx`
 - [ ] Add `middleware.ts` for auth protection
+
+**Internationalisation (i18n)**
+- [ ] Install `next-intl`: `pnpm add next-intl`
+- [ ] Wrap all routes under `app/[locale]/`
+- [ ] Create `messages/en/` and `messages/zh/` directories
+- [ ] Create `common.json`, `tasks.json`, `profile.json`, `wallet.json`, `auth.json`, `dashboard.json` for each locale
+- [ ] Configure `next-intl` middleware in `middleware.ts` for locale detection and redirect
+- [ ] Configure `i18n.ts` (next-intl routing config)
+- [ ] Replace all hardcoded UI strings with `t()` calls
+
+**UGC Content Translation**
+- [ ] Add `GOOGLE_TRANSLATE_API_KEY` (or DeepL) to `.env` (server-only, no `NEXT_PUBLIC_`)
+- [ ] Add `titleEn`, `descriptionEn`, `titleZh`, `descriptionZh`, `originalLocale` columns to Prisma `Task` model
+- [ ] Run migration: `npx prisma migrate dev --name add-translation-fields`
+- [ ] Create `lib/db/translation.ts` with `translateTask()` and `translateText()`
+- [ ] Update `createTaskRecord()` to trigger async translation job after saving
+- [ ] Update `queryTask()` and `queryTasks()` to accept `locale` param and resolve correct fields
+- [ ] Add `translationPending` indicator to `TaskCard` UI
