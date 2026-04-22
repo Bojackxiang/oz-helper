@@ -1,62 +1,92 @@
-import Link from "next/link"
+import Link from "next/link";
+
+const FOOTER_LINKS = [
+  {
+    heading: "For Requesters",
+    links: [
+      { label: "Post a Task", href: "#" },
+      { label: "How It Works", href: "#" },
+      { label: "Pricing Guide", href: "#" },
+      { label: "Safety Tips", href: "#" },
+    ],
+  },
+  {
+    heading: "For Taskers",
+    links: [
+      { label: "Become a Tasker", href: "#" },
+      { label: "Verification Process", href: "#" },
+      { label: "Pro Badge", href: "#" },
+      { label: "Earnings Guide", href: "#" },
+    ],
+  },
+  {
+    heading: "Support",
+    links: [
+      { label: "Help Centre", href: "#" },
+      { label: "Contact Us", href: "#" },
+      { label: "Privacy Policy", href: "#" },
+      { label: "Terms of Service", href: "#" },
+    ],
+  },
+];
 
 export function MarketingFooter() {
   return (
-    <footer className="border-t border-border bg-card">
-      <div className="container mx-auto px-4 py-12">
-        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
+    <footer className="border-t border-white/5 bg-[#080808]">
+      <div className="container mx-auto px-4 py-14">
+        <div className="grid gap-10 md:grid-cols-2 lg:grid-cols-4">
+          {/* Brand */}
           <div>
             <Link href="/" className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
-                <span className="text-lg font-bold text-primary-foreground">Oz</span>
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#D4AF37]">
+                <span className="text-sm font-black text-black">Oz</span>
               </div>
-              <span className="text-xl font-bold text-foreground">OzHelper</span>
+              <span
+                className="font-black tracking-[-0.03em] text-white"
+                style={{
+                  fontFamily: "DM Sans, sans-serif",
+                  fontSize: "1.125rem",
+                }}
+              >
+                OzHelper
+              </span>
             </Link>
-            <p className="mt-4 text-sm text-muted-foreground">
-              Connecting Australian communities through trusted local help. From students to professionals.
+            <p className="mt-4 text-sm leading-relaxed text-[#A6A6A6]">
+              Connecting Australian communities through trusted local help. From
+              students to professionals.
             </p>
           </div>
 
-          <div>
-            <h4 className="mb-4 font-semibold text-foreground">For Requesters</h4>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="#" className="hover:text-foreground">Post a Task</Link></li>
-              <li><Link href="#" className="hover:text-foreground">How It Works</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Pricing Guide</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Safety Tips</Link></li>
-            </ul>
-          </div>
-
-          <div>
-            <h4 className="mb-4 font-semibold text-foreground">For Taskers</h4>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="#" className="hover:text-foreground">Become a Tasker</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Verification Process</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Pro Badge</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Earnings Guide</Link></li>
-            </ul>
-          </div>
-
-          <div>
-            <h4 className="mb-4 font-semibold text-foreground">Support</h4>
-            <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link href="#" className="hover:text-foreground">Help Centre</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Contact Us</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Privacy Policy</Link></li>
-              <li><Link href="#" className="hover:text-foreground">Terms of Service</Link></li>
-            </ul>
-          </div>
+          {/* Link columns */}
+          {FOOTER_LINKS.map((col) => (
+            <div key={col.heading}>
+              <h4 className="mb-4 text-sm font-semibold text-white">
+                {col.heading}
+              </h4>
+              <ul className="space-y-2.5">
+                {col.links.map((link) => (
+                  <li key={link.label}>
+                    <Link
+                      href={link.href}
+                      className="text-sm text-[#A6A6A6] transition-colors duration-150 hover:text-white"
+                    >
+                      {link.label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
 
-        <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-border pt-8 md:flex-row">
-          <p className="text-sm text-muted-foreground">
-            2026 OzHelper. All rights reserved. Made with care in Australia.
+        <div className="mt-14 flex flex-col items-center justify-between gap-4 border-t border-white/5 pt-8 md:flex-row">
+          <p className="text-sm text-[#A6A6A6]">
+            &copy; 2026 OzHelper. All rights reserved. Made with care in
+            Australia.
           </p>
-          <div className="flex items-center gap-4">
-            <span className="text-xs text-muted-foreground">Proudly Australian</span>
-          </div>
+          <span className="text-xs text-[#A6A6A6]">Proudly Australian</span>
         </div>
       </div>
     </footer>
-  )
+  );
 }

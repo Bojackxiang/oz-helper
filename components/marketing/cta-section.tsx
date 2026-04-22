@@ -1,28 +1,46 @@
-import { Button } from "@/components/ui/button"
-import Link from "next/link"
+import Link from "next/link";
 
 export function CTASection() {
   return (
-    <section className="bg-primary py-20">
+    <section className="border-t border-white/5 bg-[#080808] py-24">
       <div className="container mx-auto px-4">
         <div className="mx-auto max-w-3xl text-center">
-          <h2 className="mb-4 text-3xl font-bold text-primary-foreground md:text-4xl">
-            Ready to Get Started?
-          </h2>
-          <p className="mb-8 text-lg text-primary-foreground/80">
-            Join thousands of Australians already using OzHelper to get things done 
-            or earn extra income in their local community.
+          {/* Eyebrow */}
+          <p className="mb-4 text-sm font-semibold uppercase tracking-[0.15em] text-[#D4AF37]">
+            Join OzHelper
           </p>
-          <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <Button size="lg" asChild className="h-12 bg-accent px-8 text-accent-foreground hover:bg-accent/90">
-              <Link href="/sign-up">Post Your First Task</Link>
-            </Button>
-            <Button size="lg" variant="outline" asChild className="h-12 border-primary-foreground/30 bg-transparent px-8 text-primary-foreground hover:bg-primary-foreground/10">
-              <Link href="/sign-up?mode=tasker">Start Earning Today</Link>
-            </Button>
+
+          <h2
+            className="mb-5 text-balance text-4xl font-black text-white md:text-5xl"
+            style={{
+              fontFamily: "DM Sans, sans-serif",
+              letterSpacing: "-0.03em",
+            }}
+          >
+            Ready to get things done?
+          </h2>
+
+          <p className="mb-10 text-lg text-[#A6A6A6]">
+            Join thousands of Australians already using OzHelper to get tasks
+            done or earn extra income in their community.
+          </p>
+
+          <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Link
+              href="/sign-up"
+              className="rounded-full bg-[#D4AF37] px-8 py-3.5 text-sm font-bold text-black transition-all duration-150 hover:bg-[#D4AF37]/90 active:scale-95"
+            >
+              Post Your First Task
+            </Link>
+            <Link
+              href="/sign-up?mode=tasker"
+              className="rounded-full border border-white/15 px-8 py-3.5 text-sm font-medium text-white transition-all duration-150 hover:border-white/30 hover:bg-white/5 active:scale-95"
+            >
+              Start Earning Today
+            </Link>
           </div>
         </div>
       </div>
     </section>
-  )
+  );
 }
